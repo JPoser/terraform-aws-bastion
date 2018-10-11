@@ -185,19 +185,20 @@ chmod 700 /usr/bin/bastion/sync_users
 #######################################
 ## INSTALL GOOGLE-AUTHENTICATOR MFA ##
 #######################################
-
-# Install google auth
+ # Install google auth
 wget https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm -P /tmp
 sudo yum install -y /tmp/epel-release-latest-7.noarch.rpm
+sudo yum install -y google-authenticator
 
 # Set up google auth and save output to file in /tmp
-google-authenticator -t -d -f -r 3 -R 30 -W > /tmp/auth-init.txt
+sudo -u ec2-user google-authenticator -t -d -f -r 3 -R 30 -W
 
 # Save auth init file to s3 and remove from /tmp/
-aws s3 cp /tmp/auth-init.txt s3://${bucket_name} --sse --region ${aws_region} --recursive && find /tmp/auth-init.txt -mtime +1 -exec rm {} \;
+aws s3 cp /var/log/cloud-init-output.log  s3://${bucket_name}/mfa/ --sse --region ${aws_region} && rm /var/log/cloud-init-output.log
 
 # Add first time login script
 cat > /etc/profile.d/mfa.sh << 'EOF'
+
 #!/usr/bin/env bash
 if [ ! -e ~/.google_authenticator ]  &&  [ $USER != "root" ]; then
 google-authenticator --time-based --disallow-reuse --force --rate-limit=3 --rate-time=30 --window-size=3
@@ -213,18 +214,20 @@ fi
 
 EOF
 
-chmod 700 /etc/profile.d/mfa.sh
+chmod 755 /etc/profile.d/mfa.sh
+
 
 # Configure /etc/pam.d/sshd
-
-sed -e "\$aauth required pam_google_authenticator.so" /etc/pam.d/sshd
+echo "auth required pam_google_authenticator.so" >> /etc/pam.d/sshd
 sed -e '/auth       substack     password-auth/ s/^#*/#/' -i /etc/pam.d/sshd
 
 # Configure /etc/ssh/sshd_config
-sed -e '/#ChallengeResponseAuthentication no/ s/^#*/#/' -i /etc/ssh/sshd_config
-sed -i '/ChallengeResponseAuthentication yes/s/^/#/g' /etc/ssh/sshd_config
-sed -e "\$aAuthenticationMethods publickey,keyboard-interactive" /etc/ssh/sshd_config
-service restart sshd
+sed -e '/ChallengeResponseAuthentication no/ s/^#*/#/' -i /etc/ssh/sshd_config
+sed -i '/ChallengeResponseAuthentication yes/s/^#//g' /etc/ssh/sshd_config
+echo "AuthenticationMethods publickey,keyboard-interactive" >> /etc/ssh/sshd_config
+
+service sshd restart
+
 
 ###########################################
 ## SCHEDULE SCRIPTS AND SECURITY UPDATES ##
